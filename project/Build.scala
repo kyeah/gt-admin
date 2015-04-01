@@ -7,7 +7,7 @@ import scala.util.Properties
 
 object Version {
   val gtAdmin = "0.1.0"
-  val scala = "2.11.5"
+  val scala = "2.10.4"
 }
 
 object Build extends Build {
