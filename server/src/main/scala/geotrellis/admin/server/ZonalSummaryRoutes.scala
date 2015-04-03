@@ -8,13 +8,13 @@ import spray.json._
 import com.github.nscala_time.time.Imports._
 import geotrellis.spark._
 import geotrellis.spark.io._
-import geotrellis.spark.io.accumulo._
 import geotrellis.spark.op.stats._
 import geotrellis.proj4._
 import geotrellis.spark.op.stats._
 import geotrellis.spark.op.zonal.summary._
 import geotrellis.raster.op.zonal.summary._
-
+import geotrellis.spark.io.accumulo._
+import geotrellis.spark.io.cassandra._
 
 trait ZonalSummaryRoutes { self: HttpService with CorsSupport =>
   import ZonalSummaryRoutes._ 
@@ -22,6 +22,63 @@ trait ZonalSummaryRoutes { self: HttpService with CorsSupport =>
   import GeoJsonSupport._
 
   def zonalRoutes(catalog: AccumuloCatalog) = cors {
+    (pathPrefix(Segment / IntNumber) & (post) ) { (name, zoom) =>      
+      import DefaultJsonProtocol._ 
+      import org.apache.spark.SparkContext._        
+      
+      val layer = LayerId(name, zoom)      
+      val (lmd, params) = catalog.metaDataCatalog.load(layer)
+      val md = lmd.rasterMetaData  
+      
+      entity(as[Polygon]) { poly => 
+        val polygon = poly.reproject(LatLng, md.crs)
+        val bounds = md.mapTransform(polygon.envelope)
+        val tiles = catalog.load[SpaceTimeKey](layer, FilterSet(SpaceFilter[SpaceTimeKey](bounds)))
+      
+        path("min") { 
+          complete {    
+            statsReponse(name,
+              tiles
+              .mapKeys { key => key.updateTemporalComponent(key.temporalKey.time.withMonthOfYear(1).withDayOfMonth(1).withHourOfDay(0)) }
+              .averageByKey
+              .zonalSummaryByKey(polygon, Double.MaxValue, MinDouble, stk => stk.temporalComponent.time)
+              .collect
+              .sortBy(_._1) )
+          } 
+        } ~          
+        path("max") { 
+          complete {    
+            statsReponse(name,
+              tiles
+              .mapKeys { key => key.updateTemporalComponent(key.temporalKey.time.withMonthOfYear(1).withDayOfMonth(1).withHourOfDay(0)) }
+              .averageByKey
+              .zonalSummaryByKey(polygon, Double.MinValue, MaxDouble, stk => stk.temporalComponent.time)
+              .collect
+              .sortBy(_._1) )
+          } 
+        }          
+
+        // path("multimodel") {
+        //   complete {
+        //     val extent = extents(city).reproject(LatLng, md.crs)
+        //     val bounds = md.mapTransform(extent)
+        //     val model1 = catalog.load[SpaceTimeKey](LayerId("tas-miroc5-rcp45",4), FilterSet(SpaceFilter[SpaceTimeKey](bounds))).get
+        //     val model2 = catalog.load[SpaceTimeKey](LayerId("tas-access1-rcp45",4), FilterSet(SpaceFilter[SpaceTimeKey](bounds))).get
+        //     val model3 = catalog.load[SpaceTimeKey](LayerId("tas-cm-rcp45",4), FilterSet(SpaceFilter[SpaceTimeKey](bounds))).get
+        //     val ret = new RasterRDD[SpaceTimeKey](model1.union(model2).union(model3), md)
+        //       .mapKeys { key => key.updateTemporalComponent(key.temporalKey.time.withMonthOfYear(1).withDayOfMonth(1).withHourOfDay(0)) }
+        //       .averageByKey
+        //       .zonalSummaryByKey(extent, Double.MinValue, MaxDouble, stk => stk.temporalComponent.time)
+        //       .collect
+        //       .sortBy(_._1)
+        //     statsReponse("miroc5-access1-cm", ret)
+        //   }
+        // } 
+      }
+    }
+  }
+
+  def zonalRoutes(catalog: CassandraCatalog) = cors {
     (pathPrefix(Segment / IntNumber) & (post) ) { (name, zoom) =>      
       import DefaultJsonProtocol._ 
       import org.apache.spark.SparkContext._        

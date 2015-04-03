@@ -63,14 +63,13 @@ object CassandraCatalogService extends ArgApp[CassandraCatalogArgs] with SimpleR
                 if(zooms.contains(zoom)) {
                   val layerId = LayerId(layer, zoom)
 
-                  catalog.loadTile(layerId, SpatialKey(x, y))
-/*                  timeOption match {
+                  timeOption match {
                     case Some(timeStr) =>
                       val time = DateTime.parse(timeStr)
                       catalog.loadTile(layerId, SpaceTimeKey(x, y, time))
                     case None =>
                       catalog.loadTile(layerId, SpatialKey(x, y))
-                  }*/
+                  }
                 } else {
                   val z = zooms.max
 
@@ -91,14 +90,14 @@ object CassandraCatalogService extends ArgApp[CassandraCatalogArgs] with SimpleR
                     println(s"SOURCE EXTENT $sourceExtent")
                     println(s"TARGET EXTENT $targetExtent")
 
-                    val largerTile = catalog.loadTile(layerId, SpatialKey(nx, ny))
-                      //timeOption match {
-                      //  case Some(timeStr) =>
-                      //    val time = DateTime.parse(timeStr)
-                      //    catalog.loadTile(layerId, SpaceTimeKey(nx, ny, time))
-                      //  case None =>
-
-                      //}
+                    val largerTile = 
+                      timeOption match {
+                        case Some(timeStr) =>
+                          val time = DateTime.parse(timeStr)
+                          catalog.loadTile(layerId, SpaceTimeKey(nx, ny, time))
+                        case None =>
+                          catalog.loadTile(layerId, SpatialKey(nx, ny))                          
+                      }
 
                     largerTile.resample(sourceExtent, RasterExtent(targetExtent, 256, 256))
                   } else {
@@ -167,13 +166,13 @@ object CassandraCatalogService extends ArgApp[CassandraCatalogArgs] with SimpleR
       (path("bands") & get) { 
         import DefaultJsonProtocol._
         complete{ future {          
-/*          val bands = {
+          val bands = {
             val GridBounds(col, row, _, _) = md.mapTransform(md.extent)
-            val filters = new FilterSet[SpaceTimeKey]() withFilter SpaceFilter(GridBounds(col, row, col, row))
+            val filters = new FilterSet[SpaceTimeKey]()// withFilter SpaceFilter(GridBounds(col, row, col, row))
             catalog.load(layer, filters).map {
               case (key, tile) => key.temporalKey.time.toString
             }
-          }.collect*/
+          }.collect
           JsObject("time" -> null)
         } }
       } ~ 
@@ -182,11 +181,11 @@ object CassandraCatalogService extends ArgApp[CassandraCatalogArgs] with SimpleR
           import DefaultJsonProtocol._ 
           complete { future {                      
             
-//            (if (layer.name == "NLCD")
-              Histogram(catalog.load[SpatialKey](layer)).getQuantileBreaks(num.toInt)
-//            else
-//              Histogram(catalog.load[SpaceTimeKey](layer))
-//            ).getQuantileBreaks(num.toInt)
+            (if (layer.name == "NLCD")
+              Histogram(catalog.load[SpatialKey](layer))
+            else
+              Histogram(catalog.load[SpaceTimeKey](layer))
+            ).getQuantileBreaks(num.toInt)
           } }
         }
       }
@@ -203,7 +202,6 @@ object CassandraCatalogService extends ArgApp[CassandraCatalogArgs] with SimpleR
     result
   }
 
-/*
   def pixelRoute = cors {
     import DefaultJsonProtocol._
     import org.apache.spark.SparkContext._
@@ -261,7 +259,7 @@ object CassandraCatalogService extends ArgApp[CassandraCatalogArgs] with SimpleR
       }
     }
   }
-*/
+
   def vectorRoute = 
     cors {
       import DefaultJsonProtocol._
@@ -277,9 +275,9 @@ object CassandraCatalogService extends ArgApp[CassandraCatalogArgs] with SimpleR
   def root = {
     pathPrefix("catalog") { catalogRoute } ~
       pathPrefix("tms") { tmsRoute } ~
-      //pathPrefix("stats") { zonalRoutes(catalog) } ~
-      pathPrefix("vector") { vectorRoute }// ~
-      //pixelRoute
+      pathPrefix("stats") { zonalRoutes(catalog) } ~
+      pathPrefix("vector") { vectorRoute } ~
+      pixelRoute
   }
 
   startServer(interface = "0.0.0.0", port = 8088) {
