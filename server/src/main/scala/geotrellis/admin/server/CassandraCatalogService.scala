@@ -41,9 +41,9 @@ object CassandraCatalogService extends ArgApp[CassandraCatalogArgs] with SimpleR
   val sparkConf = sparkContext.getConf
   sparkConf.set("spark.cassandra.connection.host", argHolder.host)
   val connector = CassandraConnector(sparkConf)
-  val cassandra = CassandraInstance(connector, argHolder.keyspace)  
+  implicit val cassandra = CassandraInstance(connector, argHolder.keyspace)  
 
-  val catalog = cassandra.catalog
+  val catalog = CassandraRasterCatalog("metadata", "attributes")
 
   /** Simple route to test responsiveness of service. */
   val pingPong = path("ping")(complete("pong"))
@@ -57,7 +57,7 @@ object CassandraCatalogService extends ArgApp[CassandraCatalogArgs] with SimpleR
         respondWithMediaType(MediaTypes.`image/png`) {
           complete {
             future {
-              val zooms = catalog.metaDataCatalog.zoomLevelsFor(layer)
+              val zooms = catalog.layerMetaDataCatalog.zoomLevelsFor(layer)
 
               val tile = 
                 if(zooms.contains(zoom)) {
@@ -66,9 +66,9 @@ object CassandraCatalogService extends ArgApp[CassandraCatalogArgs] with SimpleR
                   timeOption match {
                     case Some(timeStr) =>
                       val time = DateTime.parse(timeStr)
-                      catalog.loadTile(layerId, SpaceTimeKey(x, y, time))
+                      catalog.tileReader[SpaceTimeKey](layerId).read(SpaceTimeKey(x, y, time))
                     case None =>
-                      catalog.loadTile(layerId, SpatialKey(x, y))
+                      catalog.tileReader[SpatialKey](layerId).read(SpatialKey(x, y))
                   }
                 } else {
                   val z = zooms.max
@@ -76,7 +76,7 @@ object CassandraCatalogService extends ArgApp[CassandraCatalogArgs] with SimpleR
                   if(zoom > z) {
                     val layerId = LayerId(layer, z)
 
-                    val (meta, _) = catalog.metaDataCatalog.load(layerId)
+                    val meta = catalog.layerMetaDataCatalog.read(layerId)
                     val rmd = meta.rasterMetaData
 
                     val layoutLevel = layoutScheme.levelFor(zoom)
@@ -94,9 +94,9 @@ object CassandraCatalogService extends ArgApp[CassandraCatalogArgs] with SimpleR
                       timeOption match {
                         case Some(timeStr) =>
                           val time = DateTime.parse(timeStr)
-                          catalog.loadTile(layerId, SpaceTimeKey(nx, ny, time))
+                          catalog.tileReader[SpaceTimeKey](layerId).read(SpaceTimeKey(nx, ny, time))
                         case None =>
-                          catalog.loadTile(layerId, SpatialKey(nx, ny))                          
+                          catalog.tileReader[SpatialKey](layerId).read(SpatialKey(nx, ny))
                       }
 
                     largerTile.resample(sourceExtent, RasterExtent(targetExtent, 256, 256))
@@ -126,13 +126,12 @@ object CassandraCatalogService extends ArgApp[CassandraCatalogArgs] with SimpleR
         complete {
           import DefaultJsonProtocol._
 
-          catalog.metaDataCatalog.fetchAll.toSeq.map {
-            case (key, lmd) =>
+          catalog.layerMetaDataCatalog.fetchAll.toSeq.map {
+            case (key, CassandraLayerMetaData(md, histogram, _, _)) =>
               println(s"Loading $key")
-              val (layer, table) = key
-              val md = lmd.rasterMetaData
+              val layer = key
               val center = md.extent.reproject(md.crs, LatLng).center
-              val breaks = lmd.histogram.get.getQuantileBreaks(12)
+              val breaks = histogram.get.getQuantileBreaks(12)
 
               JsObject(
                 "layer" -> layer.toJson,
@@ -145,46 +144,30 @@ object CassandraCatalogService extends ArgApp[CassandraCatalogArgs] with SimpleR
       }
     } ~ 
     pathPrefix(Segment / IntNumber) { (name, zoom) =>      
-      val layer = LayerId(name, zoom)
-      val (lmd, params) = {
-        val catalogMetaData = catalog.metaDataCatalog.fetchAll
-        val candidates = 
-          catalogMetaData
-            .filterKeys( key => key._1 == layer)
-
-        candidates.size match {
-          case 0 =>
-            throw new LayerNotFoundError(layer)
-          case 1 =>
-            val (key, value) = candidates.toList.head
-            (value, key._2)
-          case _ =>
-            throw new MultipleMatchError(layer)
-        }
-      }
-      val md = lmd.rasterMetaData
+      val layer = LayerId(name, zoom)                                      
+      val Some(CassandraLayerMetaData(md, _, _, _)) = catalog.layerMetaDataCatalog.fetchAll.get(layer)
       (path("bands") & get) { 
         import DefaultJsonProtocol._
         complete{ future {          
-          val bands = {
+          /*val bands = {
             val GridBounds(col, row, _, _) = md.mapTransform(md.extent)
             val filters = new FilterSet[SpaceTimeKey]()// withFilter SpaceFilter(GridBounds(col, row, col, row))
-            catalog.load(layer, filters).map {
+            catalog.reader[SpaceTimeKey].read(layer, filters).map {
               case (key, tile) => key.temporalKey.time.toString
             }
-          }.collect
+          }.collect*/
           JsObject("time" -> null)
         } }
       } ~ 
       (path("breaks") & get) {
-        parameters('num ? "10") { num =>  
+        parameters('num ? "10") { num => 
           import DefaultJsonProtocol._ 
           complete { future {                      
             
             (if (layer.name == "NLCD")
-              Histogram(catalog.load[SpatialKey](layer))
+              Histogram(catalog.reader[SpatialKey].read(layer))
             else
-              Histogram(catalog.load[SpaceTimeKey](layer))
+              Histogram(catalog.reader[SpaceTimeKey].read(layer))
             ).getQuantileBreaks(num.toInt)
           } }
         }
@@ -210,13 +193,12 @@ object CassandraCatalogService extends ArgApp[CassandraCatalogArgs] with SimpleR
       get {
         parameters('name, 'zoom.as[Int], 'x.as[Double], 'y.as[Double]) { (name, zoom, x, y) =>
           val layer = LayerId(name, zoom)
-          val (lmd, params) = catalog.metaDataCatalog.load(layer)
-          val md = lmd.rasterMetaData
+          val CassandraLayerMetaData(md, _, _, _) = catalog.layerMetaDataCatalog.read(layer)
           val crs = md.crs
 
           val p = Point(x, y).reproject(LatLng, crs)
           val key = md.mapTransform(p)
-          val rdd = catalog.load[SpaceTimeKey](layer, FilterSet(SpaceFilter[SpaceTimeKey](key.col, key.row)))
+          val rdd = catalog.reader[SpaceTimeKey].read(layer, FilterSet(SpaceFilter[SpaceTimeKey](key.col, key.row)))
           val bcMetaData = rdd.sparkContext.broadcast(rdd.metaData)
 
           def createCombiner(value: Double): (Double, Double) =
@@ -260,6 +242,7 @@ object CassandraCatalogService extends ArgApp[CassandraCatalogArgs] with SimpleR
     }
   }
 
+/*
   def vectorRoute = 
     cors {
       import DefaultJsonProtocol._
@@ -271,12 +254,12 @@ object CassandraCatalogService extends ArgApp[CassandraCatalogArgs] with SimpleR
         }
       }
     }
-
+*/
   def root = {
     pathPrefix("catalog") { catalogRoute } ~
       pathPrefix("tms") { tmsRoute } ~
       pathPrefix("stats") { zonalRoutes(catalog) } ~
-      pathPrefix("vector") { vectorRoute } ~
+      //pathPrefix("vector") { vectorRoute } ~
       pixelRoute
   }
 

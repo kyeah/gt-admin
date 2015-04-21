@@ -21,19 +21,18 @@ trait ZonalSummaryRoutes { self: HttpService with CorsSupport =>
   import spray.httpx.SprayJsonSupport._  
   import GeoJsonSupport._
 
-  def zonalRoutes(catalog: AccumuloCatalog) = cors {
+  def zonalRoutes(catalog: AccumuloRasterCatalog) = cors {
     (pathPrefix(Segment / IntNumber) & (post) ) { (name, zoom) =>      
       import DefaultJsonProtocol._ 
       import org.apache.spark.SparkContext._        
       
       val layer = LayerId(name, zoom)      
-      val (lmd, params) = catalog.metaDataCatalog.load(layer)
-      val md = lmd.rasterMetaData  
+      val AccumuloLayerMetaData(md,_,_,_) = catalog.layerMetaDataCatalog.read(layer)
       
       entity(as[Polygon]) { poly => 
         val polygon = poly.reproject(LatLng, md.crs)
         val bounds = md.mapTransform(polygon.envelope)
-        val tiles = catalog.load[SpaceTimeKey](layer, FilterSet(SpaceFilter[SpaceTimeKey](bounds)))
+        val tiles = catalog.reader[SpaceTimeKey].read(layer, FilterSet(SpaceFilter[SpaceTimeKey](bounds)))
       
         path("min") { 
           complete {    
@@ -78,19 +77,18 @@ trait ZonalSummaryRoutes { self: HttpService with CorsSupport =>
     }
   }
 
-  def zonalRoutes(catalog: CassandraCatalog) = cors {
+  def zonalRoutes(catalog: CassandraRasterCatalog) = cors {
     (pathPrefix(Segment / IntNumber) & (post) ) { (name, zoom) =>      
       import DefaultJsonProtocol._ 
       import org.apache.spark.SparkContext._        
       
       val layer = LayerId(name, zoom)      
-      val (lmd, params) = catalog.metaDataCatalog.load(layer)
-      val md = lmd.rasterMetaData  
+      val CassandraLayerMetaData(md,_,_,_) = catalog.layerMetaDataCatalog.read(layer)
       
       entity(as[Polygon]) { poly => 
         val polygon = poly.reproject(LatLng, md.crs)
         val bounds = md.mapTransform(polygon.envelope)
-        val tiles = catalog.load[SpaceTimeKey](layer, FilterSet(SpaceFilter[SpaceTimeKey](bounds)))
+        val tiles = catalog.reader[SpaceTimeKey].read(layer, FilterSet(SpaceFilter[SpaceTimeKey](bounds)))
       
         path("min") { 
           complete {    

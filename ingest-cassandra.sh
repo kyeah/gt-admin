@@ -1,7 +1,9 @@
 ### INGEST SPATIAL GEOTIFF IN CASSANDRA ###
 
 # geotrellis-spark JAR. Shouldn't have to change this one if running in the root folder (remember to run ./sbt "project spark" assembly)
-JAR=/home/kyeh/cs/git/gt-admin/ingest/target/scala-2.10/gt-admin-ingest-assembly-0.1.0-SNAPSHOT.jar
+JAR=/home/kyeh/cs/git/geotrellis/spark/target/scala-2.10/geotrellis-spark-assembly-0.10.0-SNAPSHOT.jar
+#/home/kyeh/.ivy2/local/com.azavea.geotrellis/geotrellis-spark_2.10/0.10.0-SNAPSHOT/jars/geotrellis-spark_2.10.jar
+#/home/kyeh/cs/git/gt-admin/ingest/target/scala-2.10/gt-admin-ingest-assembly-0.1.0-SNAPSHOT.jar
 
 #/home/kyeh/.ivy2/local/com.azavea.geotrellis/geotrellis-spark_2.10/0.10.0-SNAPSHOT/jars/geotrellis-spark_2.10.jar
 
